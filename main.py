@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI app
 app = FastAPI(
     title="Knowledge Representation Engine",
-    description="Dynamic AI-powered knowledge representation system",
-    version="1.0.0"
+    description="Dynamic AI-powered knowledge representation system with caching",
+    version="2.0.0"
 )
 
 # CORS middleware
@@ -66,7 +66,7 @@ async def startup_event():
     try:
         await db_manager.initialize()
         await llm_manager.initialize()
-        logger.info("🚀 Knowledge Representation Engine started successfully!")
+        logger.info("🚀 Knowledge Representation Engine v2.0 started successfully!")
     except Exception as e:
         logger.error(f"❌ Startup failed: {e}")
         raise
@@ -97,21 +97,111 @@ async def admin_panel(request: Request):
         "app_title": "Knowledge Representation Admin"
     })
 
-# API Routes
+# Enhanced Cache Response Model
+class CacheInfo(BaseModel):
+    is_cached: bool
+    cache_age_hours: Optional[float] = None
+    cache_usage_count: Optional[int] = None
+    cache_last_used: Optional[datetime] = None
+
+# API Routes with Caching
 @app.post("/api/process", response_model=RepresentationResponse)
 async def process_query(
     request: QueryRequest,
+    regenerate: bool = False,
     db = Depends(get_db)
 ):
-    """Process user query and generate representation"""
+    """Process user query with caching support"""
     try:
-        
         logger.info(f"🔍 Processing query: {request.query[:50]}...")
         logger.info(f"📊 Representation mode: {request.representation_mode}")
+        logger.info(f"🔄 Regenerate: {regenerate}")
 
         # Generate session ID
         session_id = str(uuid.uuid4())
         start_time = time.time()
+        
+        # Generate cache hash
+        query_hash = db_manager.generate_query_hash(
+            query=request.query,
+            context=json.dumps(request.context) if request.context else None,
+            representation_mode=request.representation_mode,
+            user_preferences=request.user_preferences
+        )
+        
+        # Check cache first (unless regenerate is requested)
+        cached_response = None
+        cache_info = CacheInfo(is_cached=False)
+        
+        if not regenerate:
+            logger.info(f"🔍 Checking cache for hash: {query_hash[:12]}...")
+            cached_response = await db_manager.get_cached_response(query_hash)
+            
+            if cached_response:
+                logger.info(f"✅ Found cached response (used {cached_response['usage_count']} times)")
+                
+                # Calculate cache age
+                cache_created = datetime.fromisoformat(cached_response['created_at'])
+                cache_age = datetime.now() - cache_created
+                cache_age_hours = cache_age.total_seconds() / 3600
+                
+                cache_info = CacheInfo(
+                    is_cached=True,
+                    cache_age_hours=round(cache_age_hours, 2),
+                    cache_usage_count=cached_response['usage_count'],
+                    cache_last_used=datetime.fromisoformat(cached_response['last_used'])
+                )
+                
+                # Parse cached data
+                try:
+                    cached_representation = json.loads(cached_response['representation_output'])
+                    cached_token_usage = json.loads(cached_response['token_usage']) if cached_response['token_usage'] else {}
+                    
+                    # Return cached response with updated timing
+                    processing_time = time.time() - start_time
+                    
+                    # Log conversation for analytics (even if cached)
+                    conversation_log = ConversationLog(
+                        session_id=session_id,
+                        user_query=request.query,
+                        context=request.context,
+                        representation_mode=request.representation_mode,
+                        user_preferences=request.user_preferences,
+                        timestamp=datetime.now(),
+                        query_hash=query_hash,
+                        llm_response=cached_response['llm_response'],
+                        representation_output=cached_representation,
+                        token_usage=cached_token_usage,
+                        processing_time=processing_time,
+                        llm_config=json.loads(cached_response['llm_config']) if cached_response['llm_config'] else {}
+                    )
+                    
+                    try:
+                        await db_manager.save_conversation(conversation_log)
+                    except Exception as db_error:
+                        logger.warning(f"⚠️ Database save failed for cached response: {db_error}")
+                    
+                    return RepresentationResponse(
+                        session_id=session_id,
+                        original_query=request.query,
+                        llm_response=cached_response['llm_response'],
+                        representation=cached_representation,
+                        mode=request.representation_mode,
+                        token_usage=cached_token_usage,
+                        processing_time=round(processing_time, 3),
+                        timestamp=datetime.now(),
+                        metadata={
+                            'cache_info': cache_info.dict(),
+                            'query_hash': query_hash
+                        }
+                    )
+                    
+                except Exception as parse_error:
+                    logger.warning(f"⚠️ Failed to parse cached response: {parse_error}")
+                    # Continue to fresh generation if cache is corrupted
+        
+        # Generate fresh response
+        logger.info("🤖 Generating fresh LLM response...")
         
         # Log the incoming request
         conversation_log = ConversationLog(
@@ -120,20 +210,21 @@ async def process_query(
             context=request.context,
             representation_mode=request.representation_mode,
             user_preferences=request.user_preferences,
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
+            query_hash=query_hash
         )
         
         # Generate LLM response if not provided
-        logger.info("🤖 Generating LLM response...")
         if not request.response:
             try:
                 llm_response = await llm_manager.generate_response(
-                query=request.query,
-                context=request.context,
-                representation_mode=request.representation_mode
+                    query=request.query,
+                    context=request.context,
+                    representation_mode=request.representation_mode
                 )
                 response_text = llm_response.content
                 token_usage = llm_response.usage
+                llm_config = llm_manager.get_current_config()
                 logger.info(f"✅ LLM response generated: {len(response_text)} characters")
             except Exception as e:
                 logger.error(f"❌ LLM generation failed: {e}")
@@ -141,6 +232,7 @@ async def process_query(
         else:
             response_text = request.response
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            llm_config = {}
         
         # Generate representation
         logger.info("🎨 Generating representation...")
@@ -153,37 +245,47 @@ async def process_query(
             logger.info(f"✅ Representation generated: {representation_result.mode}")
         except Exception as e:
             logger.error(f"❌ Representation generation failed: {e}")
-            logger.error(f"Representation error details: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Representation error: {str(e)}")
         
         # Calculate processing time
         processing_time = time.time() - start_time
         
         # Convert RepresentationResult to dict for database and response
-        representation_dict = {
-            "mode": representation_result.mode,
-            "content": representation_result.content,
-            "metadata": representation_result.metadata,
-            "css_classes": representation_result.css_classes,
-            "javascript_code": representation_result.javascript_code
-        }
-        
+        representation_dict = representation_result.dict()
         
         # Update conversation log
         conversation_log.llm_response = response_text
         conversation_log.representation_output = representation_dict
         conversation_log.token_usage = token_usage
         conversation_log.processing_time = processing_time
-        conversation_log.llm_config = llm_manager.get_current_config()
+        conversation_log.llm_config = llm_config
         
-        # Save to database with error handling
+        # Save to cache (for fresh responses)
+        try:
+            logger.info("💾 Saving to cache...")
+            await db_manager.save_to_cache(
+                query_hash=query_hash,
+                query=request.query,
+                context=json.dumps(request.context) if request.context else None,
+                representation_mode=request.representation_mode,
+                user_preferences=request.user_preferences,
+                llm_response=response_text,
+                representation_output=representation_dict,
+                token_usage=token_usage,
+                processing_time=processing_time,
+                llm_config=llm_config
+            )
+            logger.info("✅ Cache save successful")
+        except Exception as cache_error:
+            logger.warning(f"⚠️ Cache save failed: {cache_error}")
+        
+        # Save to database
         try:
             logger.info("💾 Saving to database...")
             await db_manager.save_conversation(conversation_log)
             logger.info("✅ Database save successful")
         except Exception as db_error:
             logger.warning(f"⚠️ Database save failed: {db_error}")
-            # Continue processing even if database save fails
         
         logger.info(f"🎉 Request processed successfully in {processing_time:.2f}s")
         
@@ -194,19 +296,48 @@ async def process_query(
             representation=representation_dict,
             mode=request.representation_mode,
             token_usage=token_usage,
-            processing_time=round(processing_time, 2),
-            timestamp=datetime.now()
+            processing_time=round(processing_time, 3),
+            timestamp=datetime.now(),
+            metadata={
+                'cache_info': cache_info.dict(),
+                'query_hash': query_hash,
+                'regenerated': regenerate
+            }
         )
         
     except Exception as e:
         logger.error(f"❌ Processing error: {e}")
         raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
 
-
 @app.get("/api/representations")
 async def get_representations():
     """Get available representation modes"""
     return {"modes": representation_engine.get_available_modes()}
+
+@app.get("/api/cache/stats")
+async def get_cache_stats(db = Depends(get_db)):
+    """Get cache statistics"""
+    try:
+        stats = await db_manager.get_system_stats()
+        return {
+            "cache_entries": stats.get('cache_stats', {}).get('entries', 0),
+            "total_cache_hits": stats.get('cache_stats', {}).get('total_hits', 0),
+            "cache_hit_rate": "N/A"  # Would need additional calculation
+        }
+    except Exception as e:
+        logger.error(f"Error fetching cache stats: {e}")
+        raise HTTPException(status_code=500, detail=f"Error fetching cache stats: {str(e)}")
+
+@app.post("/api/cache/clear")
+async def clear_cache(db = Depends(get_db)):
+    """Clear cache entries (admin only)"""
+    try:
+        # This would require admin authentication in production
+        await db_manager.execute_query("DELETE FROM response_cache")
+        return {"message": "Cache cleared successfully"}
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        raise HTTPException(status_code=500, detail=f"Error clearing cache: {str(e)}")
 
 @app.get("/api/sessions/{session_id}")
 async def get_session(session_id: str, db = Depends(get_db)):
@@ -314,7 +445,7 @@ async def health_check():
         return {
             "status": "healthy" if all([db_healthy, llm_healthy, rep_healthy]) else "degraded",
             "timestamp": datetime.now(),
-            "version": "1.0.0",
+            "version": "2.0.0",
             "components": {
                 "database": db_healthy,
                 "llm": llm_healthy,

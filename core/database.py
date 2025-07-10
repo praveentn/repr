@@ -4,7 +4,8 @@ import aiosqlite
 import json
 import asyncio
 import time
-from typing import List, Dict, Any, Optional
+import hashlib
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
@@ -91,6 +92,7 @@ class DatabaseManager:
                 token_usage TEXT,
                 processing_time REAL,
                 llm_config TEXT,
+                query_hash TEXT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
@@ -142,6 +144,24 @@ class DatabaseManager:
                 response_time REAL,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS response_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                query_hash TEXT UNIQUE NOT NULL,
+                query TEXT NOT NULL,
+                context TEXT,
+                representation_mode TEXT NOT NULL,
+                user_preferences TEXT,
+                llm_response TEXT,
+                representation_output TEXT,
+                token_usage TEXT,
+                processing_time REAL,
+                llm_config TEXT,
+                usage_count INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                last_used DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
             """
         ]
         
@@ -152,13 +172,92 @@ class DatabaseManager:
         indexes = [
             "CREATE INDEX IF NOT EXISTS idx_conversations_session ON conversations(session_id)",
             "CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON conversations(timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_conversations_hash ON conversations(query_hash)",
             "CREATE INDEX IF NOT EXISTS idx_sessions_activity ON user_sessions(last_activity)",
             "CREATE INDEX IF NOT EXISTS idx_conversations_mode ON conversations(representation_mode)",
-            "CREATE INDEX IF NOT EXISTS idx_llm_usage_session ON llm_usage_logs(session_id)"
+            "CREATE INDEX IF NOT EXISTS idx_llm_usage_session ON llm_usage_logs(session_id)",
+            "CREATE INDEX IF NOT EXISTS idx_cache_hash ON response_cache(query_hash)",
+            "CREATE INDEX IF NOT EXISTS idx_cache_mode ON response_cache(representation_mode)",
+            "CREATE INDEX IF NOT EXISTS idx_cache_last_used ON response_cache(last_used)"
         ]
         
         for index_sql in indexes:
             await db.execute(index_sql)
+    
+    def generate_query_hash(self, query: str, context: str = None, representation_mode: str = "plain_text", user_preferences: Dict = None) -> str:
+        """Generate MD5 hash for query caching"""
+        # Normalize inputs
+        query_normalized = query.strip().lower()
+        context_normalized = (context or "").strip().lower()
+        preferences_normalized = json.dumps(user_preferences or {}, sort_keys=True)
+        
+        # Create hash string
+        hash_string = f"{query_normalized}|{context_normalized}|{representation_mode}|{preferences_normalized}"
+        
+        # Generate MD5 hash
+        return hashlib.md5(hash_string.encode()).hexdigest()
+    
+    async def get_cached_response(self, query_hash: str) -> Optional[Dict]:
+        """Get cached response by hash"""
+        async def _get_cached():
+            async with self._get_connection() as db:
+                db.row_factory = aiosqlite.Row
+                
+                cursor = await db.execute("""
+                    SELECT * FROM response_cache 
+                    WHERE query_hash = ? 
+                    ORDER BY last_used DESC 
+                    LIMIT 1
+                """, (query_hash,))
+                
+                result = await cursor.fetchone()
+                
+                if result:
+                    # Update usage count and last_used
+                    await db.execute("""
+                        UPDATE response_cache 
+                        SET usage_count = usage_count + 1, last_used = CURRENT_TIMESTAMP
+                        WHERE query_hash = ?
+                    """, (query_hash,))
+                    await db.commit()
+                    
+                    return dict(result)
+                
+                return None
+        
+        return await self._execute_with_retry(_get_cached)
+    
+    async def save_to_cache(self, query_hash: str, query: str, context: str, representation_mode: str, 
+                          user_preferences: Dict, llm_response: str, representation_output: Dict, 
+                          token_usage: Dict, processing_time: float, llm_config: Dict) -> bool:
+        """Save response to cache"""
+        async def _save_cache():
+            async with self._get_connection() as db:
+                try:
+                    await db.execute("""
+                        INSERT OR REPLACE INTO response_cache (
+                            query_hash, query, context, representation_mode, user_preferences,
+                            llm_response, representation_output, token_usage, processing_time, llm_config
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        query_hash,
+                        query,
+                        json.dumps(context) if context else None,
+                        representation_mode,
+                        json.dumps(user_preferences) if user_preferences else None,
+                        llm_response,
+                        json.dumps(representation_output.dict() if hasattr(representation_output, 'dict') else representation_output),
+                        json.dumps(token_usage) if token_usage else None,
+                        round(processing_time, 3) if processing_time else None,
+                        json.dumps(llm_config) if llm_config else None
+                    ))
+                    await db.commit()
+                    return True
+                except Exception as e:
+                    logger.error(f"Error saving to cache: {e}")
+                    return False
+        
+        return await self._execute_with_retry(_save_cache)
     
     async def _execute_with_retry(self, operation, *args, **kwargs):
         """Execute database operation with retry logic"""
@@ -197,8 +296,8 @@ class DatabaseManager:
                         INSERT INTO conversations (
                             session_id, user_query, context, llm_response, 
                             representation_mode, representation_output, user_preferences,
-                            token_usage, processing_time, llm_config, timestamp
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            token_usage, processing_time, llm_config, query_hash, timestamp
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         conversation_log.session_id,
                         conversation_log.user_query,
@@ -210,6 +309,7 @@ class DatabaseManager:
                         json.dumps(conversation_log.token_usage) if conversation_log.token_usage else None,
                         round(conversation_log.processing_time, 3) if conversation_log.processing_time else None,
                         json.dumps(conversation_log.llm_config) if conversation_log.llm_config else None,
+                        getattr(conversation_log, 'query_hash', None),
                         conversation_log.timestamp
                     ))
                     
@@ -341,6 +441,19 @@ class DatabaseManager:
                 result = await cursor.fetchone()
                 stats['todays_conversations'] = result['count'] if result else 0
                 
+                # Cache statistics
+                cursor = await db.execute("""
+                    SELECT 
+                        COUNT(*) as cache_entries,
+                        SUM(usage_count) as total_cache_hits
+                    FROM response_cache
+                """)
+                cache_stats = await cursor.fetchone()
+                stats['cache_stats'] = {
+                    'entries': cache_stats['cache_entries'] if cache_stats else 0,
+                    'total_hits': cache_stats['total_cache_hits'] if cache_stats else 0
+                }
+                
                 # Token usage summary
                 cursor = await db.execute("""
                     SELECT 
@@ -468,7 +581,7 @@ class DatabaseManager:
                 cursor = await db.execute("""
                     SELECT 
                         id, session_id, user_query, representation_mode,
-                        processing_time, timestamp,
+                        processing_time, timestamp, query_hash,
                         json_extract(token_usage, '$.total_tokens') as tokens
                     FROM conversations 
                     ORDER BY timestamp DESC 
@@ -498,6 +611,19 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Database health check failed: {e}")
             return False
+    
+    async def cleanup_old_cache(self, days: int = 30) -> int:
+        """Clean up old cache entries"""
+        async def _cleanup():
+            async with self._get_connection() as db:
+                cursor = await db.execute("""
+                    DELETE FROM response_cache 
+                    WHERE last_used < datetime('now', '-{} days')
+                """.format(days))
+                await db.commit()
+                return cursor.rowcount
+        
+        return await self._execute_with_retry(_cleanup)
     
     async def close(self):
         """Cleanup database connections"""

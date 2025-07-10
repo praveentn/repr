@@ -45,6 +45,14 @@ class QueryRequest(BaseModel):
             }
         }
 
+class CacheInfo(BaseModel):
+    """Cache information for responses"""
+    is_cached: bool
+    cache_age_hours: Optional[float] = None
+    cache_usage_count: Optional[int] = None
+    cache_last_used: Optional[datetime] = None
+    query_hash: Optional[str] = None
+
 class RepresentationResponse(BaseModel):
     session_id: str
     original_query: str
@@ -70,7 +78,14 @@ class RepresentationResponse(BaseModel):
                 "mode": "knowledge_graph",
                 "token_usage": {"prompt_tokens": 100, "completion_tokens": 200, "total_tokens": 300},
                 "processing_time": 2.5,
-                "timestamp": "2025-01-01T00:00:00"
+                "timestamp": "2025-01-01T00:00:00",
+                "metadata": {
+                    "cache_info": {
+                        "is_cached": True,
+                        "cache_age_hours": 2.5,
+                        "cache_usage_count": 3
+                    }
+                }
             }
         }
 
@@ -81,6 +96,7 @@ class UserSession(BaseModel):
     conversation_count: int = 0
     total_tokens: int = 0
     total_processing_time: float = 0
+    cache_hits: int = 0
     created_at: datetime
     last_activity: datetime
     
@@ -95,6 +111,7 @@ class ConversationLog(BaseModel):
     token_usage: Optional[Dict[str, int]] = None
     processing_time: Optional[float] = None
     llm_config: Optional[Dict[str, Any]] = None
+    query_hash: Optional[str] = None
     timestamp: datetime
     
 class AdminRequest(BaseModel):
@@ -108,6 +125,14 @@ class SystemStats(BaseModel):
     token_usage: Dict[str, Any]
     popular_modes: List[Dict[str, Any]]
     recent_activity: List[Dict[str, Any]]
+    cache_stats: Optional[Dict[str, Any]] = None
+    
+class CacheStats(BaseModel):
+    entries: int
+    total_hits: int
+    hit_rate: Optional[float] = None
+    average_age_hours: Optional[float] = None
+    most_popular_queries: Optional[List[Dict[str, Any]]] = None
     
 class TableData(BaseModel):
     data: List[Dict[str, Any]]
@@ -142,6 +167,58 @@ class HealthCheckResponse(BaseModel):
     version: str
     components: Dict[str, bool]
 
+# Enhanced representation-specific models
+
+class KnowledgeGraphNode(BaseModel):
+    id: str
+    name: str
+    type: str
+    importance: int
+    description: str
+    color: str
+    size: int
+
+class KnowledgeGraphEdge(BaseModel):
+    id: str
+    from_node: str = Field(alias="from")
+    to_node: str = Field(alias="to")
+    label: str
+    relationship: str
+    strength: int
+    color: str
+    width: int
+
+class KnowledgeGraphData(BaseModel):
+    nodes: List[Dict[str, Any]]
+    edges: List[Dict[str, Any]]
+
+class TimelineEvent(BaseModel):
+    id: str
+    title: str
+    description: str
+    date_raw: str
+    date_parsed: Dict[str, Any]
+    period: float
+    precision: str
+    type: str
+    importance: int
+    icon: str
+
+class ColorCodedSection(BaseModel):
+    type: str  # facts, assumptions, examples, warnings
+    content: List[str]
+    legend: Dict[str, Any]
+
+class ConceptNode(BaseModel):
+    id: str
+    title: str
+    content: str
+    level: int
+    icon: str
+    type: str
+    expanded: bool = False
+    children: List['ConceptNode'] = []
+
 # Additional utility models
 
 class RepresentationModeInfo(BaseModel):
@@ -167,6 +244,7 @@ class ConversationSummary(BaseModel):
     last_mode: RepresentationMode
     total_tokens: int
     avg_processing_time: float
+    cache_hit_rate: float
     last_activity: datetime
     
 class ExportRequest(BaseModel):
@@ -174,6 +252,7 @@ class ExportRequest(BaseModel):
     conversation_ids: Optional[List[int]] = None
     session_id: Optional[str] = None
     date_range: Optional[Dict[str, str]] = None
+    include_cache_info: bool = False
     
 class SearchRequest(BaseModel):
     query: str
@@ -182,6 +261,26 @@ class SearchRequest(BaseModel):
     limit: int = Field(20, ge=1, le=100)
     sort_by: str = "timestamp"
     sort_order: str = Field("desc", pattern="^(asc|desc)$")
+
+class CacheRequest(BaseModel):
+    action: str = Field(..., pattern="^(clear|stats|cleanup)$")
+    parameters: Optional[Dict[str, Any]] = None
+
+class RepresentationMetrics(BaseModel):
+    mode: str
+    total_uses: int
+    average_processing_time: float
+    average_user_rating: Optional[float] = None
+    cache_hit_rate: float
+    complexity_distribution: Dict[str, int]
+
+class SystemPerformance(BaseModel):
+    avg_response_time: float
+    total_requests: int
+    cache_efficiency: float
+    popular_representations: List[RepresentationMetrics]
+    error_rate: float
+    uptime_hours: float
 
 # Error response models
 
@@ -196,3 +295,24 @@ class ValidationErrorResponse(BaseModel):
     detail: List[Dict[str, Any]]
     status_code: int = 422
     timestamp: datetime = Field(default_factory=datetime.now)
+
+# Cache-specific models
+
+class CacheEntry(BaseModel):
+    query_hash: str
+    query: str
+    representation_mode: str
+    created_at: datetime
+    last_used: datetime
+    usage_count: int
+    processing_time: float
+    token_usage: Dict[str, int]
+
+class CacheCleanupResult(BaseModel):
+    entries_removed: int
+    space_freed_mb: float
+    oldest_removed: Optional[datetime] = None
+    newest_removed: Optional[datetime] = None
+
+# Fix circular reference
+ConceptNode.model_rebuild()
