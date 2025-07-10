@@ -3,7 +3,6 @@ import asyncio
 import json
 import uuid
 import time
-import traceback
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
 from pathlib import Path
@@ -15,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+import logging
 
 from core.database import DatabaseManager, get_db
 from core.llm_manager import LLMManager
@@ -25,6 +25,13 @@ from models.schemas import (
     ConversationLog, AdminRequest
 )
 from config.settings import Settings
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -53,40 +60,25 @@ llm_manager = LLMManager()
 representation_engine = RepresentationEngine()
 auth_manager = AuthManager()
 
-# main.py - Add this helper function after imports
-def representation_result_to_dict(result) -> Dict[str, Any]:
-    """Convert RepresentationResult dataclass to dictionary"""
-    return {
-        "mode": result.mode,
-        "content": result.content,
-        "metadata": result.metadata,
-        "css_classes": result.css_classes,
-        "javascript_code": result.javascript_code
-    }
-
 @app.on_event("startup")
 async def startup_event():
     """Initialize database and core components"""
     try:
-        print("🔧 Initializing database...")
         await db_manager.initialize()
-        print("✅ Database initialized successfully!")
-        
-        print("🤖 Initializing LLM Manager...")
         await llm_manager.initialize()
-        print("✅ LLM Manager initialized successfully!")
-        
-        print("🚀 Knowledge Representation Engine started successfully!")
+        logger.info("🚀 Knowledge Representation Engine started successfully!")
     except Exception as e:
-        print(f"❌ Startup failed: {e}")
-        print(f"Error details: {traceback.format_exc()}")
+        logger.error(f"❌ Startup failed: {e}")
         raise
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Cleanup resources"""
-    await db_manager.close()
-    print("👋 Application shutdown complete")
+    try:
+        await db_manager.close()
+        logger.info("👋 Application shutdown complete")
+    except Exception as e:
+        logger.warning(f"⚠️ Shutdown warning: {e}")
 
 # Main Routes
 @app.get("/", response_class=HTMLResponse)
@@ -113,9 +105,10 @@ async def process_query(
 ):
     """Process user query and generate representation"""
     try:
-        print(f"🔍 Processing query: {request.query[:50]}...")
-        print(f"📊 Representation mode: {request.representation_mode}")
         
+        logger.info(f"🔍 Processing query: {request.query[:50]}...")
+        logger.info(f"📊 Representation mode: {request.representation_mode}")
+
         # Generate session ID
         session_id = str(uuid.uuid4())
         start_time = time.time()
@@ -131,38 +124,37 @@ async def process_query(
         )
         
         # Generate LLM response if not provided
-        print("🤖 Generating LLM response...")
+        logger.info("🤖 Generating LLM response...")
         if not request.response:
             try:
                 llm_response = await llm_manager.generate_response(
-                    query=request.query,
-                    context=request.context,
-                    representation_mode=request.representation_mode
+                query=request.query,
+                context=request.context,
+                representation_mode=request.representation_mode
                 )
                 response_text = llm_response.content
                 token_usage = llm_response.usage
-                print(f"✅ LLM response generated: {len(response_text)} characters")
+                logger.info(f"✅ LLM response generated: {len(response_text)} characters")
             except Exception as e:
-                print(f"❌ LLM generation failed: {e}")
-                print(f"LLM Error details: {traceback.format_exc()}")
+                logger.error(f"❌ LLM generation failed: {e}")
                 raise HTTPException(status_code=500, detail=f"LLM generation error: {str(e)}")
         else:
             response_text = request.response
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         
         # Generate representation
-        print("🎨 Generating representation...")
+        logger.info("🎨 Generating representation...")
         try:
             representation_result = await representation_engine.generate_representation(
                 content=response_text,
                 mode=request.representation_mode,
                 user_preferences=request.user_preferences
             )
-            print(f"✅ Representation generated: {representation_result.mode}")
+            logger.info(f"✅ Representation generated: {representation_result.mode}")
         except Exception as e:
-            print(f"❌ Representation generation failed: {e}")
-            print(f"Representation Error details: {traceback.format_exc()}")
-            raise HTTPException(status_code=500, detail=f"Representation generation error: {str(e)}")
+            logger.error(f"❌ Representation generation failed: {e}")
+            logger.error(f"Representation error details: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Representation error: {str(e)}")
         
         # Calculate processing time
         processing_time = time.time() - start_time
@@ -176,85 +168,40 @@ async def process_query(
             "javascript_code": representation_result.javascript_code
         }
         
+        
         # Update conversation log
         conversation_log.llm_response = response_text
-        conversation_log.representation_output = representation_dict  # Use dict instead of object
+        conversation_log.representation_output = representation_dict
         conversation_log.token_usage = token_usage
-        conversation_log.processing_time = round(processing_time, 3)
+        conversation_log.processing_time = processing_time
         conversation_log.llm_config = llm_manager.get_current_config()
         
-        # Save to database
-        print("💾 Saving to database...")
+        # Save to database with error handling
         try:
+            logger.info("💾 Saving to database...")
             await db_manager.save_conversation(conversation_log)
-            print("✅ Conversation saved to database")
-        except Exception as e:
-            print(f"⚠️ Database save failed: {e}")
-            # Don't fail the request if database save fails
+            logger.info("✅ Database save successful")
+        except Exception as db_error:
+            logger.warning(f"⚠️ Database save failed: {db_error}")
+            # Continue processing even if database save fails
         
-        response_data = RepresentationResponse(
+        logger.info(f"🎉 Request processed successfully in {processing_time:.2f}s")
+        
+        return RepresentationResponse(
             session_id=session_id,
             original_query=request.query,
             llm_response=response_text,
-            representation=representation_dict,  # Use dict instead of object
+            representation=representation_dict,
             mode=request.representation_mode,
             token_usage=token_usage,
-            processing_time=round(processing_time, 3),
+            processing_time=round(processing_time, 2),
             timestamp=datetime.now()
         )
         
-        print(f"🎉 Request processed successfully in {processing_time:.2f}s")
-        return response_data
-        
-    except HTTPException:
-        raise
     except Exception as e:
-        print(f"💥 Unexpected error in process_query: {e}")
-        print(f"Full traceback: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        logger.error(f"❌ Processing error: {e}")
+        raise HTTPException(status_code=500, detail=f"Processing error: {str(e)}")
 
-# Add a simple health check endpoint that tests each component
-@app.get("/api/health-detailed")
-async def detailed_health_check():
-    """Detailed health check endpoint"""
-    health_status = {
-        "status": "unknown",
-        "timestamp": datetime.now(),
-        "components": {}
-    }
-    
-    try:
-        # Test database
-        try:
-            db_healthy = await db_manager.health_check()
-            health_status["components"]["database"] = "✅ healthy" if db_healthy else "❌ unhealthy"
-        except Exception as e:
-            health_status["components"]["database"] = f"❌ error: {str(e)}"
-        
-        # Test LLM
-        try:
-            llm_healthy = await llm_manager.health_check()
-            health_status["components"]["llm"] = "✅ healthy" if llm_healthy else "❌ unhealthy"
-        except Exception as e:
-            health_status["components"]["llm"] = f"❌ error: {str(e)}"
-        
-        # Test representations
-        try:
-            repr_healthy = representation_engine.health_check()
-            health_status["components"]["representations"] = "✅ healthy" if repr_healthy else "❌ unhealthy"
-        except Exception as e:
-            health_status["components"]["representations"] = f"❌ error: {str(e)}"
-        
-        # Overall status
-        all_healthy = all("✅" in str(status) for status in health_status["components"].values())
-        health_status["status"] = "healthy" if all_healthy else "unhealthy"
-        
-        return health_status
-        
-    except Exception as e:
-        health_status["status"] = "error"
-        health_status["error"] = str(e)
-        return health_status
 
 @app.get("/api/representations")
 async def get_representations():
@@ -264,12 +211,16 @@ async def get_representations():
 @app.get("/api/sessions/{session_id}")
 async def get_session(session_id: str, db = Depends(get_db)):
     """Retrieve session data"""
-    session_data = await db_manager.get_session(session_id)
-    if not session_data:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return session_data
+    try:
+        session_data = await db_manager.get_session(session_id)
+        if not session_data:
+            raise HTTPException(status_code=404, detail="Session not found")
+        return session_data
+    except Exception as e:
+        logger.error(f"Error retrieving session: {e}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving session: {str(e)}")
 
-# Admin API Routes
+# Admin API Routes (with improved error handling)
 @app.get("/api/admin/stats")
 async def get_admin_stats(db = Depends(get_db)):
     """Get system statistics for admin dashboard"""
@@ -277,6 +228,7 @@ async def get_admin_stats(db = Depends(get_db)):
         stats = await db_manager.get_system_stats()
         return stats
     except Exception as e:
+        logger.error(f"Error fetching stats: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching stats: {str(e)}")
 
 @app.get("/api/admin/tables")
@@ -286,6 +238,7 @@ async def get_database_tables(db = Depends(get_db)):
         tables = await db_manager.get_table_list()
         return {"tables": tables}
     except Exception as e:
+        logger.error(f"Error fetching tables: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching tables: {str(e)}")
 
 @app.get("/api/admin/table/{table_name}")
@@ -300,19 +253,21 @@ async def get_table_data(
         data = await db_manager.get_table_data(table_name, page, limit)
         return data
     except Exception as e:
+        logger.error(f"Error fetching table data: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching table data: {str(e)}")
 
 @app.post("/api/admin/query")
 async def execute_sql_query(request: AdminRequest, db = Depends(get_db)):
     """Execute SQL query (admin only)"""
     try:
-        # Security check - only allow SELECT statements for now
+        # Security check - only allow SELECT statements
         if not request.query.strip().upper().startswith('SELECT'):
             raise HTTPException(status_code=403, detail="Only SELECT queries allowed")
         
         result = await db_manager.execute_query(request.query)
         return {"result": result, "query": request.query}
     except Exception as e:
+        logger.error(f"Query execution error: {e}")
         raise HTTPException(status_code=500, detail=f"Query execution error: {str(e)}")
 
 @app.get("/api/admin/conversations")
@@ -326,6 +281,7 @@ async def get_conversations(
         conversations = await db_manager.get_conversations(page, limit)
         return conversations
     except Exception as e:
+        logger.error(f"Error fetching conversations: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching conversations: {str(e)}")
 
 @app.post("/api/upload")
@@ -344,21 +300,34 @@ async def upload_file(file: UploadFile = File(...)):
             return {"success": True, "content": text_content, "filename": file.filename}
             
     except Exception as e:
+        logger.error(f"File upload error: {e}")
         raise HTTPException(status_code=400, detail=f"File upload error: {str(e)}")
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now(),
-        "version": "1.0.0",
-        "components": {
-            "database": await db_manager.health_check(),
-            "llm": await llm_manager.health_check(),
-            "representations": representation_engine.health_check()
+    try:
+        db_healthy = await db_manager.health_check()
+        llm_healthy = await llm_manager.health_check()
+        rep_healthy = representation_engine.health_check()
+        
+        return {
+            "status": "healthy" if all([db_healthy, llm_healthy, rep_healthy]) else "degraded",
+            "timestamp": datetime.now(),
+            "version": "1.0.0",
+            "components": {
+                "database": db_healthy,
+                "llm": llm_healthy,
+                "representations": rep_healthy
+            }
         }
-    }
+    except Exception as e:
+        logger.error(f"Health check error: {e}")
+        return {
+            "status": "unhealthy",
+            "timestamp": datetime.now(),
+            "error": str(e)
+        }
 
 if __name__ == "__main__":
     uvicorn.run(
