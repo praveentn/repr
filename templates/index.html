@@ -1,0 +1,630 @@
+<!-- templates/index.html -->
+<!-- Main HTML Template - Knowledge Representation Interface-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Knowledge Representation Engine</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        body { font-family: 'Inter', sans-serif; }
+        
+        /* Custom styles for representations */
+        .representation-card {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            backdrop-filter: blur(10px);
+        }
+        
+        .representation-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        }
+        
+        .color-coded-fact { @apply bg-blue-50 border-l-4 border-blue-400 p-3 mb-2; }
+        .color-coded-assumption { @apply bg-yellow-50 border-l-4 border-yellow-400 p-3 mb-2; }
+        .color-coded-example { @apply bg-green-50 border-l-4 border-green-400 p-3 mb-2; }
+        .color-coded-warning { @apply bg-red-50 border-l-4 border-red-400 p-3 mb-2; }
+        
+        .collapsible-concept {
+            @apply border border-gray-200 rounded-lg mb-2 overflow-hidden;
+        }
+        
+        .concept-header {
+            @apply bg-gray-50 p-3 cursor-pointer hover:bg-gray-100 transition-colors;
+        }
+        
+        .concept-content {
+            @apply p-3 bg-white;
+        }
+        
+        .timeline-event {
+            @apply relative pl-8 pb-8;
+        }
+        
+        .timeline-event::before {
+            content: '';
+            @apply absolute left-0 top-0 w-3 h-3 bg-blue-500 rounded-full;
+        }
+        
+        .timeline-event::after {
+            content: '';
+            @apply absolute left-1.5 top-3 w-0.5 h-full bg-gray-300;
+        }
+        
+        .timeline-event:last-child::after {
+            display: none;
+        }
+        
+        .knowledge-graph-container {
+            @apply w-full h-96 border border-gray-300 rounded-lg;
+        }
+        
+        .loading-spinner {
+            @apply animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600;
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .slide-up {
+            animation: slideUp 0.3s ease-out;
+        }
+        
+        @keyframes slideUp {
+            from { transform: translateY(100%); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-gray-50 via-white to-blue-50 min-h-screen">
+    <div x-data="knowledgeApp()" x-init="init()" class="container mx-auto px-4 py-8 max-w-7xl">
+        
+        <!-- Header -->
+        <header class="text-center mb-12">
+            <div class="inline-flex items-center justify-center w-16 h-16 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full mb-4">
+                <i class="fas fa-brain text-white text-2xl"></i>
+            </div>
+            <h1 class="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent mb-2">
+                Knowledge Representation Engine
+            </h1>
+            <p class="text-gray-600 text-lg">Transform information into multiple dynamic representations</p>
+        </header>
+
+        <!-- Main Content -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <!-- Input Panel -->
+            <div class="lg:col-span-1">
+                <div class="bg-white rounded-2xl shadow-xl p-6 representation-card">
+                    <h2 class="text-2xl font-semibold mb-6 flex items-center">
+                        <i class="fas fa-keyboard text-blue-600 mr-3"></i>
+                        Input
+                    </h2>
+                    
+                    <!-- Query Input -->
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Your Query</label>
+                        <textarea 
+                            x-model="query" 
+                            placeholder="Ask anything... e.g., 'Explain quantum computing' or 'How does machine learning work?'"
+                            class="w-full h-32 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                        ></textarea>
+                    </div>
+                    
+                    <!-- Context Input -->
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">
+                            Context (Optional)
+                            <i class="fas fa-info-circle text-gray-400 ml-1" title="Additional background information"></i>
+                        </label>
+                        <textarea 
+                            x-model="context" 
+                            placeholder="Previous conversation, background info, your expertise level..."
+                            class="w-full h-20 p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                        ></textarea>
+                    </div>
+                    
+                    <!-- File Upload -->
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Upload File (Optional)</label>
+                        <div class="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center hover:border-blue-400 transition-colors cursor-pointer"
+                             @click="$refs.fileInput.click()">
+                            <i class="fas fa-cloud-upload-alt text-gray-400 text-2xl mb-2"></i>
+                            <p class="text-sm text-gray-600">Click to upload JSON, TXT, or other files</p>
+                            <input type="file" x-ref="fileInput" @change="handleFileUpload($event)" class="hidden" accept=".json,.txt,.md">
+                        </div>
+                    </div>
+                    
+                    <!-- Representation Mode Selector -->
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium text-gray-700 mb-3">Representation Mode</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <template x-for="(mode, key) in representationModes" :key="key">
+                                <button 
+                                    @click="selectedMode = key"
+                                    :class="selectedMode === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'"
+                                    class="p-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center"
+                                >
+                                    <span x-text="mode.icon" class="mr-2"></span>
+                                    <span x-text="mode.name"></span>
+                                </button>
+                            </template>
+                        </div>
+                    </div>
+                    
+                    <!-- Submit Button -->
+                    <button 
+                        @click="processQuery()"
+                        :disabled="!query.trim() || loading"
+                        class="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-3 px-6 rounded-lg font-semibold hover:shadow-lg transform hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                    >
+                        <span x-show="!loading" class="flex items-center justify-center">
+                            <i class="fas fa-magic mr-2"></i>
+                            Generate Representation
+                        </span>
+                        <span x-show="loading" class="flex items-center justify-center">
+                            <div class="loading-spinner mr-2"></div>
+                            Processing...
+                        </span>
+                    </button>
+                </div>
+                
+                <!-- Quick Examples -->
+                <div class="mt-6 bg-white rounded-xl shadow-lg p-4">
+                    <h3 class="font-semibold mb-3 text-gray-800">💡 Quick Examples</h3>
+                    <div class="space-y-2">
+                        <template x-for="example in quickExamples" :key="example.query">
+                            <button 
+                                @click="query = example.query; selectedMode = example.mode"
+                                class="w-full text-left p-2 text-sm text-gray-600 hover:bg-blue-50 hover:text-blue-700 rounded transition-colors"
+                                x-text="example.query"
+                            ></button>
+                        </template>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Output Panel -->
+            <div class="lg:col-span-2">
+                <div class="bg-white rounded-2xl shadow-xl representation-card">
+                    
+                    <!-- Output Header -->
+                    <div class="p-6 border-b border-gray-200">
+                        <div class="flex items-center justify-between">
+                            <h2 class="text-2xl font-semibold flex items-center">
+                                <i class="fas fa-display text-blue-600 mr-3"></i>
+                                <span x-text="result ? `${representationModes[result.mode]?.name} Representation` : 'Output'"></span>
+                            </h2>
+                            <div x-show="result" class="flex items-center space-x-3">
+                                <span class="text-sm text-gray-500">
+                                    <i class="fas fa-clock mr-1"></i>
+                                    <span x-text="result?.processing_time?.toFixed(2)"></span>s
+                                </span>
+                                <span class="text-sm text-gray-500">
+                                    <i class="fas fa-coins mr-1"></i>
+                                    <span x-text="result?.token_usage?.total_tokens"></span> tokens
+                                </span>
+                                <button @click="exportResult()" class="text-blue-600 hover:text-blue-800">
+                                    <i class="fas fa-download"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Output Content -->
+                    <div class="p-6 min-h-96">
+                        
+                        <!-- Loading State -->
+                        <div x-show="loading" class="flex items-center justify-center h-64">
+                            <div class="text-center">
+                                <div class="loading-spinner mx-auto mb-4"></div>
+                                <p class="text-gray-600">Processing your request...</p>
+                                <p class="text-sm text-gray-500 mt-2">Generating <span x-text="representationModes[selectedMode]?.name"></span> representation</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Empty State -->
+                        <div x-show="!loading && !result" class="flex items-center justify-center h-64 text-center">
+                            <div>
+                                <i class="fas fa-lightbulb text-6xl text-gray-300 mb-4"></i>
+                                <h3 class="text-xl font-semibold text-gray-600 mb-2">Ready to Transform Knowledge</h3>
+                                <p class="text-gray-500">Enter your query and select a representation mode to begin</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Error State -->
+                        <div x-show="error" class="bg-red-50 border border-red-200 rounded-lg p-4">
+                            <div class="flex items-center">
+                                <i class="fas fa-exclamation-triangle text-red-600 mr-3"></i>
+                                <div>
+                                    <h4 class="font-semibold text-red-800">Error Processing Request</h4>
+                                    <p class="text-red-700" x-text="error"></p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Results -->
+                        <div x-show="result && !loading" class="fade-in">
+                            
+                            <!-- Plain Text -->
+                            <div x-show="result?.mode === 'plain_text'" class="prose max-w-none">
+                                <div x-html="result?.representation?.content?.formatted"></div>
+                            </div>
+                            
+                            <!-- Color Coded -->
+                            <div x-show="result?.mode === 'color_coded'">
+                                <!-- Legend -->
+                                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                                    <template x-for="(legend, type) in result?.representation?.content?.legend" :key="type">
+                                        <div class="flex items-center">
+                                            <div :class="`w-4 h-4 bg-${legend.color}-400 rounded mr-2`"></div>
+                                            <span class="text-sm font-medium" x-text="legend.label"></span>
+                                        </div>
+                                    </template>
+                                </div>
+                                
+                                <!-- Sections -->
+                                <div class="space-y-4">
+                                    <template x-for="(sections, type) in result?.representation?.content?.sections" :key="type">
+                                        <div x-show="sections.length > 0">
+                                            <template x-for="section in sections" :key="section">
+                                                <div :class="`color-coded-${type}`">
+                                                    <div class="flex items-start">
+                                                        <span x-text="result?.representation?.content?.legend[type]?.icon" class="mr-2 mt-1"></span>
+                                                        <span x-text="section"></span>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                            
+                            <!-- Collapsible Concepts -->
+                            <div x-show="result?.mode === 'collapsible_concepts'" class="space-y-3">
+                                <template x-for="concept in result?.representation?.content?.concepts" :key="concept.id">
+                                    <div class="collapsible-concept" x-data="{ open: false }">
+                                        <div class="concept-header" @click="open = !open">
+                                            <div class="flex items-center justify-between">
+                                                <span class="font-medium" x-text="concept.title"></span>
+                                                <i class="fas fa-chevron-down transition-transform" :class="open && 'rotate-180'"></i>
+                                            </div>
+                                        </div>
+                                        <div x-show="open" x-transition class="concept-content">
+                                            <p x-text="concept.content"></p>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                            
+                            <!-- Knowledge Graph -->
+                            <div x-show="result?.mode === 'knowledge_graph'">
+                                <div id="knowledge-graph" class="knowledge-graph-container"></div>
+                                <div class="mt-4 text-sm text-gray-600">
+                                    <p><strong>Entities:</strong> <span x-text="result?.representation?.metadata?.node_count"></span></p>
+                                    <p><strong>Relationships:</strong> <span x-text="result?.representation?.metadata?.edge_count"></span></p>
+                                </div>
+                            </div>
+                            
+                            <!-- Timeline -->
+                            <div x-show="result?.mode === 'timeline'">
+                                <div class="relative">
+                                    <template x-for="event in result?.representation?.content?.events" :key="event.date">
+                                        <div class="timeline-event">
+                                            <div class="font-semibold text-blue-600" x-text="event.date"></div>
+                                            <div class="text-gray-800" x-text="event.event"></div>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                            
+                            <!-- Summary -->
+                            <div x-show="result?.mode === 'summary'">
+                                <div class="bg-blue-50 rounded-lg p-4 mb-6">
+                                    <h4 class="font-semibold text-blue-800 mb-2">📝 TL;DR</h4>
+                                    <p class="text-blue-700" x-text="result?.representation?.content?.tldr"></p>
+                                </div>
+                                <div class="space-y-3">
+                                    <h4 class="font-semibold">Key Points:</h4>
+                                    <template x-for="point in result?.representation?.content?.key_points" :key="point">
+                                        <div class="flex items-start">
+                                            <i class="fas fa-circle text-blue-500 text-xs mt-2 mr-3"></i>
+                                            <span x-text="point"></span>
+                                        </div>
+                                    </template>
+                                </div>
+                            </div>
+                            
+                            <!-- Default/Other modes -->
+                            <div x-show="!['plain_text', 'color_coded', 'collapsible_concepts', 'knowledge_graph', 'timeline', 'summary'].includes(result?.mode)">
+                                <div class="prose max-w-none">
+                                    <div x-html="result?.llm_response?.replace(/\n/g, '<br>')"></div>
+                                </div>
+                                <div class="mt-6 p-4 bg-gray-50 rounded-lg">
+                                    <h4 class="font-semibold mb-2">Representation Data:</h4>
+                                    <pre class="text-sm text-gray-700 overflow-auto" x-text="JSON.stringify(result?.representation, null, 2)"></pre>
+                                </div>
+                            </div>
+                            
+                            <!-- Feedback -->
+                            <div class="mt-8 pt-6 border-t border-gray-200">
+                                <div class="flex items-center justify-between">
+                                    <h4 class="font-semibold">How was this representation?</h4>
+                                    <div class="flex space-x-2">
+                                        <template x-for="star in [1,2,3,4,5]" :key="star">
+                                            <button 
+                                                @click="rating = star"
+                                                :class="star <= rating ? 'text-yellow-400' : 'text-gray-300'"
+                                                class="text-xl hover:text-yellow-400 transition-colors"
+                                            >
+                                                <i class="fas fa-star"></i>
+                                            </button>
+                                        </template>
+                                    </div>
+                                </div>
+                                <div class="mt-3">
+                                    <textarea 
+                                        x-model="feedback"
+                                        placeholder="Share your thoughts (optional)..."
+                                        class="w-full h-16 p-2 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                                    ></textarea>
+                                    <button 
+                                        @click="submitFeedback()"
+                                        class="mt-2 px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors"
+                                    >
+                                        Submit Feedback
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Footer -->
+        <footer class="mt-12 text-center text-gray-600">
+            <div class="flex items-center justify-center space-x-6 mb-4">
+                <a href="/admin" class="text-blue-600 hover:text-blue-800">
+                    <i class="fas fa-cog mr-1"></i>
+                    Admin Panel
+                </a>
+                <a href="/health" class="text-green-600 hover:text-green-800">
+                    <i class="fas fa-heart mr-1"></i>
+                    System Health
+                </a>
+                <button @click="showSessionInfo = !showSessionInfo" class="text-purple-600 hover:text-purple-800">
+                    <i class="fas fa-info-circle mr-1"></i>
+                    Session Info
+                </button>
+            </div>
+            
+            <!-- Session Info Modal -->
+            <div x-show="showSessionInfo" x-transition class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" @click.self="showSessionInfo = false">
+                <div class="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+                    <h3 class="text-lg font-semibold mb-4">Session Information</h3>
+                    <div class="space-y-2 text-sm text-left">
+                        <p><strong>Session ID:</strong> <span x-text="sessionId"></span></p>
+                        <p><strong>Conversations:</strong> <span x-text="conversationCount"></span></p>
+                        <p><strong>Total Tokens:</strong> <span x-text="totalTokens"></span></p>
+                        <p><strong>Total Time:</strong> <span x-text="totalTime.toFixed(2)"></span>s</p>
+                    </div>
+                    <button @click="showSessionInfo = false" class="mt-4 w-full bg-gray-600 text-white py-2 rounded hover:bg-gray-700">
+                        Close
+                    </button>
+                </div>
+            </div>
+            
+            <p class="text-sm">Powered by AI • Built with ❤️ for Knowledge Exploration</p>
+        </footer>
+    </div>
+
+    <script>
+        function knowledgeApp() {
+            return {
+                // State
+                query: '',
+                context: '',
+                selectedMode: 'plain_text',
+                loading: false,
+                result: null,
+                error: null,
+                rating: 0,
+                feedback: '',
+                sessionId: '', // Initialize as empty string
+                conversationCount: 0,
+                totalTokens: 0,
+                totalTime: 0,
+                showSessionInfo: false,
+                
+                // Configuration
+                representationModes: {
+                    'plain_text': { name: 'Plain Text', icon: '📝', description: 'Simple, clean format' },
+                    'color_coded': { name: 'Color-Coded', icon: '🎨', description: 'Tagged sections' },
+                    'collapsible_concepts': { name: 'Concepts', icon: '🧩', description: 'Expandable tree' },
+                    'knowledge_graph': { name: 'Graph', icon: '🧠', description: 'Visual network' },
+                    'analogical': { name: 'Analogies', icon: '🧪', description: 'Metaphor-based' },
+                    'persona_eli5': { name: 'ELI5', icon: '👶', description: 'Simple terms' },
+                    'persona_expert': { name: 'Expert', icon: '👩‍🔬', description: 'Technical depth' },
+                    'timeline': { name: 'Timeline', icon: '⏳', description: 'Chronological view' },
+                    'summary': { name: 'Summary', icon: '📦', description: 'Key points' },
+                    'detailed': { name: 'Detailed', icon: '📚', description: 'Comprehensive' }
+                },
+                
+                quickExamples: [
+                    { query: 'Explain quantum computing', mode: 'knowledge_graph' },
+                    { query: 'How does machine learning work?', mode: 'color_coded' },
+                    { query: 'History of the internet', mode: 'timeline' },
+                    { query: 'What is blockchain?', mode: 'analogical' },
+                    { query: 'Climate change impacts', mode: 'summary' }
+                ],
+                
+                // Initialization method for Alpine.js
+                init() {
+                    this.sessionId = this.generateSessionId();
+                    console.log('Knowledge Representation Engine initialized');
+                },
+                
+                // Methods
+                async processQuery() {
+                    if (!this.query.trim()) return;
+                    
+                    this.loading = true;
+                    this.error = null;
+                    this.result = null;
+                    
+                    try {
+                        const requestData = {
+                            query: this.query,
+                            context: this.context ? { user_input: this.context } : null,
+                            representation_mode: this.selectedMode,
+                            user_preferences: {
+                                visual_style: 'modern',
+                                complexity_level: 'medium'
+                            },
+                            session_id: this.sessionId
+                        };
+                        
+                        const response = await fetch('/api/process', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify(requestData)
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error(`Server error: ${response.status}`);
+                        }
+                        
+                        this.result = await response.json();
+                        this.conversationCount++;
+                        this.totalTokens += this.result.token_usage?.total_tokens || 0;
+                        this.totalTime += this.result.processing_time || 0;
+                        
+                        // Initialize special visualizations
+                        await this.$nextTick();
+                        if (this.result.mode === 'knowledge_graph') {
+                            this.initializeKnowledgeGraph();
+                        }
+                        
+                    } catch (err) {
+                        this.error = err.message;
+                        console.error('Error processing query:', err);
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+                
+                initializeKnowledgeGraph() {
+                    if (!this.result?.representation?.content?.graph_data) return;
+                    
+                    const container = document.getElementById('knowledge-graph');
+                    if (!container) return;
+                    
+                    const data = this.result.representation.content.graph_data;
+                    const options = {
+                        nodes: {
+                            shape: 'dot',
+                            size: 16,
+                            font: { size: 12 },
+                            borderWidth: 2,
+                            shadow: true
+                        },
+                        edges: {
+                            width: 2,
+                            shadow: true,
+                            smooth: { type: 'continuous' }
+                        },
+                        physics: {
+                            stabilization: { iterations: 100 }
+                        }
+                    };
+                    
+                    new vis.Network(container, data, options);
+                },
+                
+                async handleFileUpload(event) {
+                    const file = event.target.files[0];
+                    if (!file) return;
+                    
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    
+                    try {
+                        const response = await fetch('/api/upload', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        
+                        const result = await response.json();
+                        if (result.success) {
+                            this.context = result.content || JSON.stringify(result.data, null, 2);
+                        }
+                    } catch (err) {
+                        console.error('File upload error:', err);
+                    }
+                },
+                
+                async submitFeedback() {
+                    if (!this.result || this.rating === 0) return;
+                    
+                    try {
+                        await fetch('/api/feedback', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                conversation_id: this.result.id,
+                                session_id: this.sessionId,
+                                rating: this.rating,
+                                feedback_text: this.feedback,
+                                representation_mode: this.result.mode
+                            })
+                        });
+                        
+                        this.rating = 0;
+                        this.feedback = '';
+                        alert('Thank you for your feedback!');
+                    } catch (err) {
+                        console.error('Feedback submission error:', err);
+                    }
+                },
+                
+                exportResult() {
+                    if (!this.result) return;
+                    
+                    const data = {
+                        query: this.query,
+                        result: this.result,
+                        timestamp: new Date().toISOString()
+                    };
+                    
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `knowledge-representation-${Date.now()}.json`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                },
+                
+                generateSessionId() {
+                    return 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+                }
+            }
+        }
+    </script>
+</body>
+</html>

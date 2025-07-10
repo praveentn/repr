@@ -1,0 +1,56 @@
+{
+  "app": {
+    "title": "Knowledge Representation Engine",
+    "version": "1.0.0",
+    "debug": false,
+    "max_query_length": 10000,
+    "max_context_length": 5000,
+    "rate_limit_per_minute": 60
+  },
+  "ui": {
+    "theme": "modern",
+    "default_representation_mode": "plain_text",
+    "enable_animations": true,
+    "items_per_page": 20,
+    "auto_save_preferences": true
+  },
+  "database": {
+    "auto_backup": false,
+    "backup_interval_hours": 24,
+    "conversation_retention_days": 365
+  },
+  "analytics": {
+    "enable_analytics": true,
+    "enable_detailed_logging": false,
+    "enable_cost_tracking": true,
+    "cost_per_1k_prompt_tokens": 0.01,
+    "cost_per_1k_completion_tokens": 0.02
+  },
+  "security": {
+    "enable_cors": true,
+    "allowed_origins": [
+      "*"
+    ],
+    "enable_authentication": false,
+    "require_api_key": false
+  },
+  "representations": {
+    "enabled_modes": [
+      "plain_text",
+      "color_coded",
+      "collapsible_concepts",
+      "knowledge_graph",
+      "analogical",
+      "persona_eli5",
+      "persona_expert",
+      "timeline",
+      "summary",
+      "detailed"
+    ],
+    "default_preferences": {
+      "visual_style": "modern",
+      "complexity_level": "medium",
+      "color_scheme": "light"
+    }
+  }
+}
