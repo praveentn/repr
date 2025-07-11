@@ -6,6 +6,7 @@ from .color_coded import ColorCodedRepresentation
 from .collapsible_concepts import CollapsibleConceptsRepresentation
 from .summary import SummaryRepresentation
 from .timeline import TimelineRepresentation
+from .puzzle_based import PuzzleBasedRepresentation
 
 __all__ = [
     'BaseRepresentation',
@@ -15,5 +16,6 @@ __all__ = [
     'ColorCodedRepresentation',
     'CollapsibleConceptsRepresentation',
     'SummaryRepresentation',
-    'TimelineRepresentation'
+    'TimelineRepresentation',
+    'PuzzleBasedRepresentation'
 ]

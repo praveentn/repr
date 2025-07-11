@@ -12,6 +12,7 @@ from representations.color_coded import ColorCodedRepresentation
 from representations.collapsible_concepts import CollapsibleConceptsRepresentation
 from representations.summary import SummaryRepresentation
 from representations.timeline import TimelineRepresentation
+from representations.puzzle_based import PuzzleBasedRepresentation
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,8 @@ class RepresentationEngine:
             CollapsibleConceptsRepresentation,
             KnowledgeGraphRepresentation,
             SummaryRepresentation,
-            TimelineRepresentation
+            TimelineRepresentation,
+            PuzzleBasedRepresentation
         ]
         
         for rep_class in representation_classes:
@@ -168,4 +170,9 @@ async def _generate_summary(content: str, preferences: Dict) -> RepresentationRe
 async def _generate_timeline(content: str, preferences: Dict) -> RepresentationResult:
     """Legacy compatibility for timeline"""
     rep = TimelineRepresentation()
+    return await rep.process(content, preferences)
+
+async def _generate_puzzle_based(content: str, preferences: Dict) -> RepresentationResult:
+    """Legacy compatibility for puzzle based"""
+    rep = PuzzleBasedRepresentation()
     return await rep.process(content, preferences)

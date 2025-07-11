@@ -19,6 +19,7 @@ class RepresentationMode(str, Enum):
     COMPARISON = "comparison"
     SUMMARY = "summary"
     DETAILED = "detailed"
+    PUZZLE_BASED = "puzzle_based"
 
 class QueryRequest(BaseModel):
     query: str = Field(..., description="User's main question or request")
@@ -218,6 +219,28 @@ class ConceptNode(BaseModel):
     type: str
     expanded: bool = False
     children: List['ConceptNode'] = []
+
+# Puzzle-Based Models
+class PuzzleChallenge(BaseModel):
+    type: str  # multiple_choice, fill_blank, true_false, concept_match
+    question: str
+    options: Optional[List[str]] = None
+    correct_answer: Any
+    difficulty: int = Field(ge=1, le=3)
+    hint: Optional[str] = None
+    case_sensitive: Optional[bool] = False
+
+class PuzzleSegment(BaseModel):
+    id: str
+    content: str
+    challenge: PuzzleChallenge
+    unlocked: bool = False
+    revealed: bool = False
+
+class PuzzleCompletionStats(BaseModel):
+    unlocked_count: int
+    revealed_count: int
+    solved_count: int
 
 # Additional utility models
 
